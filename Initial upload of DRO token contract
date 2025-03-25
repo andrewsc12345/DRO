@@ -1,0 +1,170 @@
+/**
+ *Submitted for verification at basescan.org on 2025-03-19
+*/
+
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.24;
+
+interface IAerodromeRouter {
+    function swapExactTokensForTokens(
+        uint amountIn,
+        uint amountOutMin,
+        address[] calldata path,
+        address to,
+        uint deadline
+    ) external returns (uint[] memory amounts);
+}
+
+contract DebtReliefOptimizer {
+    address private _owner;
+    mapping(address => uint256) private _balances;
+    mapping(address => mapping(address => uint256)) private _allowances;
+    uint256 private _totalSupply;
+
+    address public constant DRB_TOKEN = 0x03EC2156D4C0a9cBdAb4A016633b7Cf6A8d68eA2;
+    address public constant WETH = 0x4200000000000000000000000000000000000006;
+    address public constant ROUTER = 0x2626664C2603336E57B271C5C0B26f421741E0B0;
+    address public constant FEE_WALLET = 0x69C1beEaC7c5e65D656dFdB99320840951d6eAf2;
+    address public constant BURN_ADDRESS = 0x000000000000000000000000000000000000dEaD;
+
+    uint256 public constant TOTAL_SUPPLY = 1_000_000_000 * 10**18;
+    uint256 public constant FEE_PERCENTAGE = 1000; // 10% = 1000 basis points
+    uint256 public constant BUY_BURN_PERCENTAGE = 8000; // 80% = 8000 basis points
+    uint256 private constant BASIS_POINTS = 10000;
+
+    string private _name = "Debt Relief Optimizer";
+    string private _symbol = "DRO";
+
+    uint256 public accumulatedFees;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    constructor() {
+        _owner = msg.sender;
+        _totalSupply = TOTAL_SUPPLY;
+        _balances[_owner] = TOTAL_SUPPLY;
+        emit OwnershipTransferred(address(0), _owner);
+        emit Transfer(address(0), _owner, TOTAL_SUPPLY);
+    }
+
+    function owner() public view returns (address) {
+        return _owner;
+    }
+
+    modifier onlyOwner() {
+        require(_owner == msg.sender, "Ownable: not owner");
+        _;
+    }
+
+    function name() public view returns (string memory) {
+        return _name;
+    }
+
+    function symbol() public view returns (string memory) {
+        return _symbol;
+    }
+
+    function decimals() public pure returns (uint8) {
+        return 18;
+    }
+
+    function totalSupply() public view returns (uint256) {
+        return _totalSupply;
+    }
+
+    function balanceOf(address account) public view returns (uint256) {
+        return _balances[account];
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        _transfer(msg.sender, to, amount);
+        return true;
+    }
+
+    function allowance(address owner_, address spender) external view returns (uint256) {
+        return _allowances[owner_][spender];
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        _approve(msg.sender, spender, amount);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        address spender = msg.sender;
+        uint256 currentAllowance = _allowances[from][spender];
+        require(currentAllowance >= amount, "ERC20: insufficient allowance");
+        _transfer(from, to, amount);
+        unchecked {
+            _approve(from, spender, currentAllowance - amount);
+        }
+        return true;
+    }
+
+    function _transfer(address from, address to, uint256 amount) internal {
+        require(from != address(0), "ERC20: from zero address");
+        require(to != address(0), "ERC20: to zero address");
+        uint256 fromBalance = _balances[from];
+        require(fromBalance >= amount, "ERC20: insufficient balance");
+        unchecked {
+            _balances[from] = fromBalance - amount;
+            _balances[to] += amount;
+        }
+        emit Transfer(from, to, amount);
+    }
+
+    function _approve(address owner_, address spender, uint256 amount) internal {
+        require(owner_ != address(0), "ERC20: approve from zero");
+        require(spender != address(0), "ERC20: approve to zero");
+        _allowances[owner_][spender] = amount;
+        emit Approval(owner_, spender, amount);
+    }
+
+    function transferWithFee(address recipient, uint256 amount) external returns (bool) {
+        require(amount > 0, "DRO: amount must be > 0");
+        require(amount >= 100, "DRO: amount too small");
+        
+        uint256 fee = (amount * FEE_PERCENTAGE) / BASIS_POINTS;
+        uint256 amountAfterFee = amount - fee;
+
+        _transfer(msg.sender, recipient, amountAfterFee);
+        _transfer(msg.sender, address(this), fee);
+
+        uint256 feeToWallet = (fee * (BASIS_POINTS - BUY_BURN_PERCENTAGE)) / BASIS_POINTS;
+        require(feeToWallet > 0, "DRO: fee split too small");
+        uint256 feeToBurn = fee - feeToWallet;
+
+        _transfer(address(this), FEE_WALLET, feeToWallet);
+        accumulatedFees += feeToBurn;
+
+        return true;
+    }
+
+    function burnFees() external onlyOwner {
+        require(accumulatedFees > 0, "DRO: no fees to burn");
+
+        uint256 feeToBurn = accumulatedFees;
+        accumulatedFees = 0;
+
+        address[] memory path = new address[](3);
+        path[0] = address(this);
+        path[1] = WETH;
+        path[2] = DRB_TOKEN;
+
+        _approve(address(this), ROUTER, feeToBurn);
+        
+        IAerodromeRouter(ROUTER).swapExactTokensForTokens(
+            feeToBurn,
+            0,
+            path,
+            BURN_ADDRESS,
+            block.timestamp + 300
+        );
+    }
+
+    function getAccumulatedFees() external view returns (uint256) {
+        return accumulatedFees;
+    }
+}
